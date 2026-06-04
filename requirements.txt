@@ -1,0 +1,13 @@
+requests
+pandas
+pyodbc
+openmeteo-requests
+requests-cache
+retry-requests
+SQLAlchemy
+supabase
+psycopg2-binary
+openpyxl
+python-dotenv
+dash
+plotly
