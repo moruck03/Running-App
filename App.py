@@ -23,10 +23,7 @@ import dash_bootstrap_components as dbc
 
 load_dotenv()
 
-SUPABASE_DB_URL = os.getenv(
-    "SUPABASE_DB_URL",
-    "postgresql+psycopg2://m0ruck03:PIPELINES@db.kfunmzwtpteokgwmuujm.supabase.co:5432/postgres"
-)
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 
 engine = create_engine(SUPABASE_DB_URL)
 
