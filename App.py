@@ -1,6 +1,5 @@
 
 # app.py
-pip install -r requirements.txt
 import os
 import json
 import logging
