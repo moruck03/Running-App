@@ -11,3 +11,4 @@ openpyxl
 python-dotenv
 dash
 plotly
+dash-bootstrap-components
