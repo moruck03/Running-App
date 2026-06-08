@@ -1,5 +1,7 @@
+# App.py
+# Running Weather Recommendation Dashboard
+# Dash + Open-Meteo APIs + Supabase PostgreSQL + ETL Pipeline
 
-# app.py
 import os
 import json
 import logging
@@ -7,12 +9,13 @@ from pathlib import Path
 
 import requests
 import pandas as pd
+import plotly.express as px
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from sqlalchemy import create_engine, text
 
-from dash import Dash, html, dcc, Input, Output, State, callback, no_update
+from dash import Dash, html, dcc, Input, Output, callback
 import dash_bootstrap_components as dbc
 
 
@@ -20,9 +23,15 @@ import dash_bootstrap_components as dbc
 # LOAD ENVIRONMENT VARIABLES
 # =========================================================
 
-load_dotenv()
+load_dotenv(override=True)
 
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+
+if not SUPABASE_DB_URL:
+    raise ValueError(
+        "SUPABASE_DB_URL is missing. Check that your .env file exists "
+        "and contains SUPABASE_DB_URL=your_connection_string"
+    )
 
 engine = create_engine(SUPABASE_DB_URL)
 
@@ -222,75 +231,90 @@ def create_table():
 # =========================================================
 
 def temperature_score(temp):
+    # Best running temperatures are usually cool to mild.
+    # Full ranges are included so no temperature falls through unclear gaps.
     if temp < 32:
         return 30
+    elif 32 <= temp <= 39:
+        return 60
     elif 40 <= temp <= 49:
         return 85
     elif 50 <= temp <= 65:
         return 100
+    elif 66 <= temp <= 75:
+        return 80
     elif 76 <= temp <= 85:
         return 55
-    elif temp > 85:
+    else:
         return 25
-    return 70
 
 
 def humidity_score(humidity):
+    # Humidity is measured as a percentage.
+    # Lower to moderate humidity is better for outdoor running.
     if humidity < 55:
         return 100
     elif 55 <= humidity <= 60:
         return 85
     elif 61 <= humidity <= 65:
         return 70
-    elif humidity > 70:
+    elif 66 <= humidity <= 70:
+        return 50
+    else:
         return 20
-    return 50
 
 
 def precipitation_score(precip):
+    # Precipitation is the chance of precipitation as a percentage.
     if precip <= 10:
         return 100
-    elif precip <= 30:
+    elif 11 <= precip <= 30:
         return 85
-    elif precip <= 50:
+    elif 31 <= precip <= 50:
         return 60
-    elif precip <= 70:
+    elif 51 <= precip <= 70:
         return 35
-    return 10
+    else:
+        return 10
 
 
 def wind_score(wind):
+    # Wind speed is measured in miles per hour.
     if wind < 10:
         return 100
-    elif wind <= 15:
+    elif 10 <= wind <= 15:
         return 80
-    elif wind <= 20:
+    elif 16 <= wind <= 20:
         return 60
-    elif wind <= 30:
+    elif 21 <= wind <= 30:
         return 35
-    return 10
+    else:
+        return 10
 
 
 def aqi_score(aqi):
+    # AQI uses the U.S. AQI scale from Open-Meteo Air Quality API.
     if aqi <= 50:
         return 100
-    elif aqi <= 100:
+    elif 51 <= aqi <= 100:
         return 80
-    elif aqi <= 150:
+    elif 101 <= aqi <= 150:
         return 45
-    return 10
+    else:
+        return 10
 
 
 def uv_score(uv):
     if uv <= 2:
         return 100
-    elif uv <= 5:
+    elif 3 <= uv <= 5:
         return 85
-    elif uv <= 7:
+    elif 6 <= uv <= 7:
         return 65
-    elif uv <= 10:
+    elif 8 <= uv <= 10:
         return 40
-    return 20
+    else:
+        return 20
 
 
 # =========================================================
@@ -321,12 +345,19 @@ def transform_data(weather_df, air_df):
     df["aqi_score"] = df["aqi"].apply(aqi_score)
     df["uv_score"] = df["uv_index"].apply(uv_score)
 
+    # Weighted run score:
+    # Temperature: 25%
+    # Humidity: 20%
+    # Precipitation: 20%
+    # Wind: 15%
+    # AQI: 15%
+    # UV Index: 5%
     df["run_score"] = (
-        (df["temperature_score"] * 0.30) +
-        (df["humidity_score"] * 0.25) +
+        (df["temperature_score"] * 0.25) +
+        (df["humidity_score"] * 0.20) +
         (df["precipitation_score"] * 0.20) +
-        (df["wind_score"] * 0.10) +
-        (df["aqi_score"] * 0.10) +
+        (df["wind_score"] * 0.15) +
+        (df["aqi_score"] * 0.15) +
         (df["uv_score"] * 0.05)
     )
 
@@ -537,6 +568,32 @@ def validate_postgres_load(expected_rows):
     logger.info(f"Load validation passed. weather_hourly contains {count} rows.")
 
 
+# =========================================================
+# DATABASE QUERY HELPERS
+# =========================================================
+
+def get_available_dates():
+    query = """
+        SELECT DISTINCT DATE(time) AS run_date
+        FROM weather_hourly
+        ORDER BY run_date;
+    """
+
+    try:
+        df = pd.read_sql(query, engine)
+    except Exception:
+        return []
+
+    return [
+        {"label": str(row["run_date"]), "value": str(row["run_date"])}
+        for _, row in df.iterrows()
+    ]
+
+
+def get_today_string():
+    return str(pd.Timestamp.now().date())
+
+
 def get_best_run_times(limit=5):
     with engine.begin() as conn:
         rows = conn.execute(text("""
@@ -551,11 +608,37 @@ def get_best_run_times(limit=5):
                 aqi,
                 uv_index
             FROM weather_hourly
+            WHERE DATE(time) = CURRENT_DATE
             ORDER BY run_score DESC, time ASC
             LIMIT :limit;
         """), {"limit": limit}).fetchall()
 
     return rows
+
+
+def get_dashboard_data():
+    query = """
+        SELECT
+            time,
+            run_score,
+            recommendation,
+            temperature_2m_f,
+            humidity_percent,
+            precipitation_probability_percent,
+            wind_speed_mph,
+            aqi,
+            uv_index,
+            temperature_score,
+            humidity_score,
+            precipitation_score,
+            wind_score,
+            aqi_score,
+            uv_score
+        FROM weather_hourly
+        ORDER BY time;
+    """
+
+    return pd.read_sql(query, engine)
 
 
 # =========================================================
@@ -590,31 +673,89 @@ def run_etl_pipeline(latitude, longitude):
 
 
 # =========================================================
-# DASH APP
+# DASH APP LAYOUT
 # =========================================================
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 app.layout = dbc.Container([
-    html.H1("Running Weather Recommendation App"),
+    html.H1("Running Weather Recommendation Dashboard", className="text-center mt-4"),
 
     html.P(
-        "Click the button below to allow location access. "
-        "Dash will use your browser coordinates to call both Open-Meteo APIs."
+        "This dashboard uses Open-Meteo weather and air quality data to recommend the best time to run.",
+        className="text-center"
     ),
 
-    dbc.Button(
-        "Use My Location & Run ETL",
-        id="get-location-button",
-        color="primary",
-        className="mb-3"
-    ),
+    dbc.Row([
+        dbc.Col(
+            dbc.Button(
+                "Use My Location & Refresh ETL",
+                id="get-location-button",
+                color="primary",
+                className="mb-3"
+            ),
+            width=12
+        )
+    ]),
 
     dcc.Store(id="location-store"),
 
     html.Div(id="location-output", className="mb-3"),
 
-    html.Div(id="etl-output")
+    dbc.Row([
+        dbc.Col([
+            html.Label("Filter by Date"),
+            dcc.Dropdown(
+                id="date-filter",
+                options=[],
+                value=None,
+                clearable=False
+            )
+        ], width=4)
+    ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H5("Best Run Score", className="card-title"),
+                html.H2(id="best-score-card")
+            ])
+        ]), width=3),
+
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H5("Best Run Time", className="card-title"),
+                html.H2(id="best-time-card")
+            ])
+        ]), width=3),
+
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H5("Top 3 Run Times", className="card-title"),
+                html.Div(id="top-three-times-card")
+            ])
+        ]), width=3),
+
+        dbc.Col(dbc.Card([
+            dbc.CardBody([
+                html.H5("Total Records", className="card-title"),
+                html.H2(id="record-count-card")
+            ])
+        ]), width=3),
+    ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col(dcc.Graph(id="run-score-line-chart"), width=12)
+    ]),
+
+    dbc.Row([
+        dbc.Col(dcc.Graph(id="temperature-forecast-chart"), width=6),
+        dbc.Col(dcc.Graph(id="score-factor-breakdown"), width=6),
+    ]),
+
+    html.H3("Filtered Running Conditions Table", className="mt-4"),
+    html.Div(id="data-table")
+
 ], fluid=True)
 
 
@@ -663,70 +804,247 @@ app.clientside_callback(
 
 @callback(
     Output("location-output", "children"),
-    Output("etl-output", "children"),
     Input("location-store", "data")
 )
 def run_pipeline_from_location(location_data):
     if not location_data:
-        return "", ""
+        return ""
 
     if "error" in location_data:
-        return dbc.Alert(location_data["error"], color="danger"), ""
+        return dbc.Alert(location_data["error"], color="danger")
 
     latitude = location_data["latitude"]
     longitude = location_data["longitude"]
 
-    location_message = dbc.Alert(
-        f"Location received: latitude {latitude:.4f}, longitude {longitude:.4f}",
-        color="success"
-    )
-
     try:
-        best_times = run_etl_pipeline(latitude, longitude)
+        run_etl_pipeline(latitude, longitude)
 
-        rows = []
-
-        for row in best_times:
-            rows.append(html.Tr([
-                html.Td(str(row.time)),
-                html.Td(round(row.run_score, 2)),
-                html.Td(row.recommendation),
-                html.Td(row.temperature_2m_f),
-                html.Td(row.humidity_percent),
-                html.Td(row.precipitation_probability_percent),
-                html.Td(row.wind_speed_mph),
-                html.Td(row.aqi),
-                html.Td(row.uv_index)
-            ]))
-
-        table = dbc.Table([
-            html.Thead(html.Tr([
-                html.Th("Time"),
-                html.Th("Run Score"),
-                html.Th("Recommendation"),
-                html.Th("Temp °F"),
-                html.Th("Humidity %"),
-                html.Th("Precip %"),
-                html.Th("Wind MPH"),
-                html.Th("AQI"),
-                html.Th("UV")
-            ])),
-            html.Tbody(rows)
-        ], bordered=True, hover=True, responsive=True)
-
-        return location_message, html.Div([
-            dbc.Alert("ETL pipeline completed successfully.", color="success"),
-            html.H3("Top 5 Best Run Times"),
-            table
-        ])
+        return dbc.Alert(
+            f"ETL refreshed successfully for latitude {latitude:.4f}, longitude {longitude:.4f}.",
+            color="success"
+        )
 
     except Exception as error:
         logger.error(f"Dash ETL callback failed: {error}")
 
-        return location_message, dbc.Alert(
+        return dbc.Alert(
             f"ETL pipeline failed: {error}",
             color="danger"
         )
+
+
+# =========================================================
+# SERVER CALLBACK: UPDATE DATE FILTER OPTIONS
+# =========================================================
+
+@callback(
+    Output("date-filter", "options"),
+    Output("date-filter", "value"),
+    Input("location-output", "children")
+)
+def update_date_filter_options(_):
+    options = get_available_dates()
+
+    if not options:
+        return [], None
+
+    today = get_today_string()
+    available_values = [option["value"] for option in options]
+
+    if today in available_values:
+        selected_value = today
+    else:
+        selected_value = available_values[0]
+
+    return options, selected_value
+
+
+# =========================================================
+# SERVER CALLBACK: UPDATE DASHBOARD FROM POSTGRESQL
+# =========================================================
+
+@callback(
+    Output("best-score-card", "children"),
+    Output("best-time-card", "children"),
+    Output("top-three-times-card", "children"),
+    Output("record-count-card", "children"),
+    Output("run-score-line-chart", "figure"),
+    Output("temperature-forecast-chart", "figure"),
+    Output("score-factor-breakdown", "figure"),
+    Output("data-table", "children"),
+    Input("date-filter", "value"),
+    Input("location-output", "children")
+)
+def update_dashboard(selected_date, _):
+    try:
+        df = get_dashboard_data()
+    except Exception as error:
+        logger.error(f"Dashboard query failed: {error}")
+
+        empty_fig = px.line(title="Database query failed")
+
+        return (
+            "N/A",
+            "N/A",
+            "N/A",
+            "N/A",
+            "N/A",
+            "0",
+            empty_fig,
+            empty_fig,
+            empty_fig,
+            dbc.Alert(f"Could not load dashboard data: {error}", color="danger")
+        )
+
+    if df.empty:
+        empty_fig = px.line(title="No data available")
+
+        return (
+            "N/A",
+            "N/A",
+            "N/A",
+            "N/A",
+            "N/A",
+            "0",
+            empty_fig,
+            empty_fig,
+            empty_fig,
+            dbc.Alert("No data available. Click 'Use My Location & Refresh ETL' first.", color="warning")
+        )
+
+    df["time"] = pd.to_datetime(df["time"])
+    df["run_date"] = df["time"].dt.date.astype(str)
+
+    temp_df = df.copy()
+    temp_df = temp_df[
+        temp_df["time"] < pd.Timestamp.now() + pd.Timedelta(days=7)
+    ]
+
+    if selected_date:
+        filtered_df = df[df["run_date"] == selected_date]
+    else:
+        filtered_df = df[df["run_date"] == get_today_string()]
+
+    # Exclude late-night/very-early hours from recommendations.
+    # This keeps the "best run time" useful for most runners.
+    # Excluded hours: 10 PM, 11 PM, 12 AM, 1 AM, 2 AM, 3 AM.
+    excluded_hours = [22, 23, 0, 1, 2, 3]
+    filtered_df = filtered_df[
+        ~filtered_df["time"].dt.hour.isin(excluded_hours)
+    ]
+
+    if filtered_df.empty:
+        empty_fig = px.line(title="No data available for selected date")
+
+        return (
+            "N/A",
+            "N/A",
+            "N/A",
+            "N/A",
+            "N/A",
+            "0",
+            empty_fig,
+            empty_fig,
+            empty_fig,
+            dbc.Alert("No records found for the selected date.", color="warning")
+        )
+
+    best_row = filtered_df.sort_values("run_score", ascending=False).iloc[0]
+
+    best_score = round(best_row["run_score"], 2)
+    best_time = pd.to_datetime(best_row["time"]).strftime("%I:%M %p")
+    record_count = len(filtered_df)
+
+    top_three = (
+        filtered_df
+        .sort_values("run_score", ascending=False)
+        .head(3)
+    )
+
+    medals = ["🥇", "🥈", "🥉"]
+    top_three_text = []
+
+    for i, (_, row) in enumerate(top_three.iterrows()):
+        run_time = pd.to_datetime(row["time"]).strftime("%I:%M %p")
+        score = round(row["run_score"], 1)
+        top_three_text.append(
+            html.Div(f"{medals[i]} {run_time} — Score: {score}")
+        )
+
+    line_fig = px.line(
+        filtered_df,
+        x="time",
+        y="run_score",
+        title=f"Run Score Over Time for {selected_date}",
+        labels={"time": "Time", "run_score": "Run Score"}
+    )
+
+    temp_fig = px.line(
+        temp_df,
+        x="time",
+        y="temperature_2m_f",
+        title="Temperature Forecast for Next 7 Days",
+        labels={
+            "time": "Date/Time",
+            "temperature_2m_f": "Temperature °F"
+        }
+    )
+
+    factor_cols = [
+        "temperature_score",
+        "humidity_score",
+        "precipitation_score",
+        "wind_score",
+        "aqi_score",
+        "uv_score"
+    ]
+
+    factor_avg = filtered_df[factor_cols].mean().reset_index()
+    factor_avg.columns = ["factor", "average_score"]
+
+    factor_fig = px.bar(
+        factor_avg,
+        x="factor",
+        y="average_score",
+        title=f"Average Weather Factor Scores for {selected_date}",
+        labels={
+            "factor": "Weather Factor",
+            "average_score": "Average Score"
+        }
+    )
+
+    display_df = filtered_df[[
+        "time",
+        "run_score",
+        "recommendation",
+        "temperature_2m_f",
+        "humidity_percent",
+        "precipitation_probability_percent",
+        "wind_speed_mph",
+        "aqi",
+        "uv_index"
+    ]].copy()
+
+    display_df["time"] = display_df["time"].dt.strftime("%Y-%m-%d %I:%M %p")
+
+    table = dbc.Table.from_dataframe(
+        display_df.head(24),
+        striped=True,
+        bordered=True,
+        hover=True,
+        responsive=True
+    )
+
+    return (
+        best_score,
+        best_time,
+        top_three_text,
+        record_count,
+        line_fig,
+        temp_fig,
+        factor_fig,
+        table
+    )
 
 
 # =========================================================
@@ -735,4 +1053,3 @@ def run_pipeline_from_location(location_data):
 
 if __name__ == "__main__":
     app.run(debug=True)
-
