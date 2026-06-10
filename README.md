@@ -1,5 +1,3 @@
-# Running-App
-Pipelines Project
 # Running Weather Recommendation Dashboard
 
 ## Project Overview
@@ -52,12 +50,9 @@ The application is especially useful for runners with limited free time because 
 - Pandas
 - Requests
 - SQLAlchemy
-- PostgreSQL
 - Supabase
 - Open-Meteo Forecast API
 - Open-Meteo Air Quality API
-- python-dotenv
-- dash-bootstrap-components
 
 ---
 
@@ -161,7 +156,7 @@ The Dash dashboard includes:
 - Best Run Score
 - Best Run Time
 - Top 3 Run Times
-- Total Records
+- Indoor/Outdoor Recomendation
 
 ### Visualizations
 
@@ -186,9 +181,6 @@ Pipeline to Insights/
 ├── requirements.txt
 ├── .env
 ├── README.md
-├── raw_api_responses/
-│
-└── screenshots/
 ```
 
 ---
@@ -237,9 +229,6 @@ Example format:
 ```text
 SUPABASE_DB_URL=postgresql+psycopg2://postgres.projectref:your_password@aws-1-us-east-1.pooler.supabase.com:5432/postgres
 ```
-
-Do not include your real password in a public GitHub repository.
-
 ---
 
 ### 4. Run the Dash App
@@ -312,37 +301,7 @@ Key insights include:
 - Understanding how temperature changes over the next 7 days
 - Seeing which weather factors are lowering or improving running conditions
 - Avoiding impractical recommendations during late-night hours
+- Showing a user-facing recommendation instead of developer-only record counts
 
----
 
-## Screenshots
 
-Add dashboard screenshots in a `screenshots` folder before submission.
-
-Suggested screenshots:
-
-- Dashboard homepage
-- Top 3 Run Times card
-- Run Score Over Time chart
-- Temperature Forecast chart
-- Supabase table showing loaded data
-
----
-
-## Submission Materials
-
-Recommended materials for submission:
-
-- GitHub repository link
-- `App.py`
-- `requirements.txt`
-- `README.md`
-- Dashboard screenshots
-- Project proposal
-- Database schema documentation
-
----
-
-## Author
-
-Mckenzie Ruckle

@@ -1,4 +1,3 @@
-# App.py
 # Running Weather Recommendation Dashboard
 # Dash + Open-Meteo APIs + Supabase PostgreSQL + ETL Pipeline
 
@@ -738,8 +737,8 @@ app.layout = dbc.Container([
 
         dbc.Col(dbc.Card([
             dbc.CardBody([
-                html.H5("Total Records", className="card-title"),
-                html.H2(id="record-count-card")
+                html.H5("Recommendation", className="card-title"),
+                html.H2(id="recommendation-card")
             ])
         ]), width=3),
     ], className="mb-4"),
@@ -867,7 +866,7 @@ def update_date_filter_options(_):
     Output("best-score-card", "children"),
     Output("best-time-card", "children"),
     Output("top-three-times-card", "children"),
-    Output("record-count-card", "children"),
+    Output("recommendation-card", "children"),
     Output("run-score-line-chart", "figure"),
     Output("temperature-forecast-chart", "figure"),
     Output("score-factor-breakdown", "figure"),
@@ -888,8 +887,6 @@ def update_dashboard(selected_date, _):
             "N/A",
             "N/A",
             "N/A",
-            "N/A",
-            "0",
             empty_fig,
             empty_fig,
             empty_fig,
@@ -904,8 +901,6 @@ def update_dashboard(selected_date, _):
             "N/A",
             "N/A",
             "N/A",
-            "N/A",
-            "0",
             empty_fig,
             empty_fig,
             empty_fig,
@@ -925,8 +920,7 @@ def update_dashboard(selected_date, _):
     else:
         filtered_df = df[df["run_date"] == get_today_string()]
 
-    # Exclude late-night/very-early hours from recommendations.
-    # This keeps the "best run time" useful for most runners.
+    # Exclude late-night/very-early hours from best-time recommendations.
     # Excluded hours: 10 PM, 11 PM, 12 AM, 1 AM, 2 AM, 3 AM.
     excluded_hours = [22, 23, 0, 1, 2, 3]
     filtered_df = filtered_df[
@@ -941,19 +935,17 @@ def update_dashboard(selected_date, _):
             "N/A",
             "N/A",
             "N/A",
-            "N/A",
-            "0",
             empty_fig,
             empty_fig,
             empty_fig,
-            dbc.Alert("No records found for the selected date.", color="warning")
+            dbc.Alert("No records found for the selected date after excluding 10 PM through 3 AM.", color="warning")
         )
 
     best_row = filtered_df.sort_values("run_score", ascending=False).iloc[0]
 
     best_score = round(best_row["run_score"], 2)
     best_time = pd.to_datetime(best_row["time"]).strftime("%I:%M %p")
-    record_count = len(filtered_df)
+    current_recommendation = best_row["recommendation"]
 
     top_three = (
         filtered_df
@@ -1039,13 +1031,12 @@ def update_dashboard(selected_date, _):
         best_score,
         best_time,
         top_three_text,
-        record_count,
+        current_recommendation,
         line_fig,
         temp_fig,
         factor_fig,
         table
     )
-
 
 # =========================================================
 # RUN APP
